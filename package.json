@@ -1,0 +1,25 @@
+{
+  "name": "thinkspace",
+  "version": "1.0.0",
+  "description": "ThinkSpace - 一个用于整理思路的工具",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": [
+    "thinkspace",
+    "thought",
+    "organize",
+    "mind",
+    "idea",
+    "management"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^24.23.0",
+    "vue3-waterfall-plugin": "^1.1.5"
+  }
+}

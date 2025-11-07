@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThinkSpace - 思路整理工具</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="waterfall.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div class="container">
+            <header>
+                <h1>ThinkSpace</h1>
+                <div class="header-actions">
+                    <button @click="showCategoryModal = true" class="btn btn-primary">新建分类</button>
+                    <button @click="openCardModal" class="btn btn-primary">新建卡片</button>
+                </div>
+            </header>
+
+            <main class="main-content">
+                <div class="categories-container">
+                    <div v-if="categories.length === 0 && unclassifiedCards.length === 0" class="empty-state">
+                        还没有分类，点击"新建分类"开始吧！
+                    </div>
+                    <waterfall
+                        v-if="categories.length > 0"
+                        :list="categoriesWithCards"
+                        :width="250"
+                        :gutter="20"
+                        :breakpoints="{
+                            1200: { rowPerView: 4 },
+                            800: { rowPerView: 3 },
+                            500: { rowPerView: 2 }
+                        }"
+                        ref="waterfall"
+                    >
+                        <template #item="{ data }">
+                            <category-block
+                                :category="data.category"
+                                :cards="data.cards"
+                                @delete="handleDeleteCategory"
+                                @move-card="handleMoveCard"
+                                @delete-card="handleDeleteCard"
+                                @show-card-detail="showCardDetail"
+                                @refresh-waterfall="refreshWaterfall"
+                            />
+                        </template>
+                    </waterfall>
+                </div>
+                
+                <!-- 右侧边栏 - 未分类卡片 -->
+                <aside class="sidebar" v-if="unclassifiedCards.length > 0">
+                    <div class="sidebar-header">
+                        <h3>未分类</h3>
+                        <span class="card-count">{{ unclassifiedCards.length }}</span>
+                    </div>
+                    <div 
+                        class="sidebar-cards"
+                        @dragover.prevent="handleSidebarDragOver"
+                        @dragleave="handleSidebarDragLeave"
+                        @drop="handleSidebarDrop"
+                        :class="{ 'drag-over': sidebarDragOver }"
+                    >
+                        <card-component
+                            v-for="card in unclassifiedCards"
+                            :key="card.id"
+                            :card="card"
+                            @delete="handleDeleteCard"
+                            @click="showCardDetail(card)"
+                        />
+                    </div>
+                </aside>
+            </main>
+        </div>
+
+        <!-- 新建分类模态框 -->
+        <div v-if="showCategoryModal" class="modal" @click.self="showCategoryModal = false">
+            <div class="modal-content">
+                <span class="close" @click="showCategoryModal = false">&times;</span>
+                <h2>新建分类</h2>
+                <form @submit.prevent="handleCreateCategory">
+                    <div class="form-group">
+                        <label for="categoryName">分类名称：</label>
+                        <input 
+                            type="text" 
+                            id="categoryName" 
+                            v-model="newCategoryName"
+                            required 
+                            placeholder="请输入分类名称"
+                        >
+                    </div>
+                    <button type="submit" class="btn btn-primary">创建</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 新建卡片模态框 -->
+        <div v-if="showCardModal" class="modal" @click.self="showCardModal = false">
+            <div class="modal-content">
+                <span class="close" @click="showCardModal = false">&times;</span>
+                <h2>新建卡片</h2>
+                <form @submit.prevent="handleCreateCard">
+                    <div class="form-group">
+                        <label for="cardType">卡片类型：</label>
+                        <select v-model="newCard.type" id="cardType" @change="onCardTypeChange">
+                            <option value="custom">自定义</option>
+                            <option value="stock">股票</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="cardTitle">卡片标题：</label>
+                        <input 
+                            type="text" 
+                            id="cardTitle" 
+                            v-model="newCard.title"
+                            required 
+                            placeholder="请输入卡片标题"
+                        >
+                    </div>
+                    <div v-if="newCard.type === 'stock'" class="form-group">
+                        <label for="stockCode">股票代码：</label>
+                        <input 
+                            type="text" 
+                            id="stockCode" 
+                            v-model="newCard.stockCode"
+                            :required="newCard.type === 'stock'"
+                            placeholder="例如：sh601606 或 601606"
+                        >
+                        <small style="color: #666; display: block; margin-top: 5px;">
+                            支持格式：sh601606（上海）、sz000001（深圳）或 601606
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label>选择分类（可选）：</label>
+                        <select v-model="newCard.categoryId">
+                            <option value="">不设置分类</option>
+                            <option v-for="category in categories" :key="category.id" :value="category.id">
+                                {{ category.name }}
+                            </option>
+                        </select>
+                    </div>
+                    <div v-if="newCard.type === 'custom'" class="form-group">
+                        <label>自定义属性：</label>
+                        <div>
+                            <div 
+                                v-for="(attr, index) in newCard.attributes" 
+                                :key="index"
+                                class="attribute-input-group"
+                            >
+                                <input 
+                                    type="text" 
+                                    v-model="attr.key"
+                                    placeholder="属性名"
+                                >
+                                <input 
+                                    type="text" 
+                                    v-model="attr.value"
+                                    placeholder="属性值"
+                                >
+                                <button type="button" @click="removeAttribute(index)" class="btn btn-danger">删除</button>
+                            </div>
+                        </div>
+                        <button type="button" @click="addAttribute" class="btn btn-secondary">添加属性</button>
+                    </div>
+                    <button type="submit" class="btn btn-primary">创建</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 卡片详情弹窗 -->
+        <div v-if="selectedCard" class="modal" @click.self="selectedCard = null">
+            <div class="modal-content card-detail-modal" :class="{ 'stock-modal': selectedCard.type === 'stock' || selectedCard.stockCode }">
+                <span class="close" @click="selectedCard = null">&times;</span>
+                <h2>{{ selectedCard.title }}</h2>
+                
+                <!-- 股票类型卡片：显示分时图 -->
+                <div v-if="(selectedCard.type === 'stock' || selectedCard.stockCode) && !isEditingCard" class="stock-chart-container">
+                    <div v-if="loadingStockData" class="loading-stock">
+                        <div class="spinner"></div>
+                        <p>正在加载股票数据...</p>
+                    </div>
+                    <div v-else-if="stockData" class="stock-chart-content">
+                        <div class="stock-info-header">
+                            <div class="stock-name">{{ stockData.name || selectedCard.stockCode }}</div>
+                            <div class="stock-code">{{ stockData.code || selectedCard.stockCode }}</div>
+                            <div class="stock-price" :class="{ 'price-up': stockData.preClose < (stockData.trends?.[stockData.trends.length - 1]?.split(',')[1] || 0), 'price-down': stockData.preClose > (stockData.trends?.[stockData.trends.length - 1]?.split(',')[1] || 0) }">
+                                {{ formatStockPrice(stockData.trends?.[stockData.trends.length - 1]) }}
+                            </div>
+                        </div>
+                        <div class="chart-tabs">
+                            <button 
+                                class="chart-tab" 
+                                :class="{ active: chartType === 'fenshi' }"
+                                @click="chartType = 'fenshi'"
+                            >分时</button>
+                            <button 
+                                class="chart-tab" 
+                                :class="{ active: chartType === 'daily' }"
+                                @click="chartType = 'daily'"
+                            >日线</button>
+                        </div>
+                        <div class="chart-container" ref="chartContainer">
+                            <canvas ref="stockChart" width="800" height="400"></canvas>
+                        </div>
+                    </div>
+                    <div v-else class="stock-error">
+                        <p>无法加载股票数据，请检查股票代码是否正确</p>
+                    </div>
+                </div>
+                
+                <!-- 自定义类型卡片：显示和编辑属性 -->
+                <div v-else-if="selectedCard.type !== 'stock' && !selectedCard.stockCode" class="card-detail-content">
+                    <div v-if="!isEditingCard" class="card-view-mode">
+                        <div v-if="Object.keys(selectedCard.attributes || {}).length > 0" class="card-detail-attributes">
+                            <h3>属性信息</h3>
+                            <div 
+                                v-for="(value, key) in selectedCard.attributes" 
+                                :key="key"
+                                class="detail-attribute-item"
+                            >
+                                <span class="detail-attribute-key">{{ key }}:</span>
+                                <span class="detail-attribute-value">{{ value }}</span>
+                            </div>
+                        </div>
+                        <div v-else class="no-attributes">
+                            暂无属性信息
+                        </div>
+                        <div class="card-detail-meta">
+                            <p><strong>创建时间：</strong>{{ formatDate(selectedCard.createdAt) }}</p>
+                            <p v-if="selectedCard.categoryId">
+                                <strong>所属分类：</strong>{{ getCategoryName(selectedCard.categoryId) }}
+                            </p>
+                            <p v-else><strong>状态：</strong>未分类</p>
+                        </div>
+                        <button @click="startEditCard" class="btn btn-primary" style="margin-top: 20px;">编辑</button>
+                    </div>
+                    <div v-else class="card-edit-mode">
+                        <h3>编辑卡片</h3>
+                        <div class="form-group">
+                            <label>卡片标题：</label>
+                            <input type="text" v-model="editingCard.title" required>
+                        </div>
+                        <div class="form-group">
+                            <label>自定义属性：</label>
+                            <div>
+                                <div 
+                                    v-for="(attr, index) in editingCard.attributes" 
+                                    :key="index"
+                                    class="attribute-input-group"
+                                >
+                                    <input type="text" v-model="attr.key" placeholder="属性名">
+                                    <input type="text" v-model="attr.value" placeholder="属性值">
+                                    <button type="button" @click="removeEditAttribute(index)" class="btn btn-danger">删除</button>
+                                </div>
+                            </div>
+                            <button type="button" @click="addEditAttribute" class="btn btn-secondary">添加属性</button>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-top: 20px;">
+                            <button @click="saveEditCard" class="btn btn-primary">保存</button>
+                            <button @click="cancelEditCard" class="btn btn-secondary">取消</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
+
