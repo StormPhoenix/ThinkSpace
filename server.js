@@ -1,90 +1,139 @@
 const express = require('express');
 const path = require('path');
+const connectDB = require('./config/database');
+const Category = require('./models/Category');
+const Card = require('./models/Card');
 
 const app = express();
 const PORT = 3000;
+
+// 连接数据库
+connectDB();
 
 // 静态文件服务
 app.use(express.static('public'));
 app.use(express.json());
 
-// 数据存储（内存中，实际应用可以使用数据库）
-let categories = [];
-let cards = [];
-
 // API: 获取所有分类
-app.get('/api/categories', (req, res) => {
-  res.json(categories);
+app.get('/api/categories', async (req, res) => {
+  try {
+    const categories = await Category.find().sort({ createdAt: -1 });
+    res.json(categories);
+  } catch (error) {
+    console.error('获取分类失败:', error);
+    res.status(500).json({ error: '获取分类失败' });
+  }
 });
 
 // API: 创建新分类
-app.post('/api/categories', (req, res) => {
-  const { name } = req.body;
-  const newCategory = {
-    id: Date.now().toString(),
-    name: name || '未命名分类',
-    createdAt: new Date().toISOString()
-  };
-  categories.push(newCategory);
-  res.json(newCategory);
+app.post('/api/categories', async (req, res) => {
+  try {
+    const { name } = req.body;
+    const newCategory = new Category({
+      name: name || '未命名分类'
+    });
+    await newCategory.save();
+    res.json(newCategory);
+  } catch (error) {
+    console.error('创建分类失败:', error);
+    res.status(500).json({ error: '创建分类失败' });
+  }
 });
 
 // API: 删除分类
-app.delete('/api/categories/:id', (req, res) => {
-  const { id } = req.params;
-  categories = categories.filter(cat => cat.id !== id);
-  // 删除该分类下的所有卡片
-  cards = cards.filter(card => card.categoryId !== id);
-  res.json({ success: true });
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    // 删除分类
+    await Category.findByIdAndDelete(id);
+    // 删除该分类下的所有卡片
+    await Card.deleteMany({ categoryId: id });
+    res.json({ success: true });
+  } catch (error) {
+    console.error('删除分类失败:', error);
+    res.status(500).json({ error: '删除分类失败' });
+  }
 });
 
 // API: 获取所有卡片
-app.get('/api/cards', (req, res) => {
-  res.json(cards);
+app.get('/api/cards', async (req, res) => {
+  try {
+    const cards = await Card.find().sort({ createdAt: -1 });
+    res.json(cards);
+  } catch (error) {
+    console.error('获取卡片失败:', error);
+    res.status(500).json({ error: '获取卡片失败' });
+  }
 });
 
 // API: 创建新卡片
-app.post('/api/cards', (req, res) => {
-  const { title, type, categoryId, stockCode, attributes, } = req.body;
-  console.log('创建卡片请求:', { title, type, stockCode, categoryId });
-  const newCard = {
-    id: Date.now().toString(),
-    title: title || '未命名卡片',
-    type: type || 'custom', // 'custom' 或 'stock'
-    attributes: attributes || {},
-    stockCode: (type === 'stock' && stockCode) ? stockCode : null,
-    categoryId: categoryId || null,
-    createdAt: new Date().toISOString()
-  };
-  console.log('创建的新卡片:', newCard);
-  cards.push(newCard);
-  res.json(newCard);
+app.post('/api/cards', async (req, res) => {
+  try {
+    const { title, type, categoryId, stockCode, attributes } = req.body;
+    console.log('创建卡片请求:', { title, type, stockCode, categoryId });
+    
+    const newCard = new Card({
+      title: title || '未命名卡片',
+      type: type || 'custom',
+      attributes: attributes || {},
+      stockCode: (type === 'stock' && stockCode) ? stockCode : null,
+      categoryId: categoryId || null
+    });
+    
+    await newCard.save();
+    console.log('创建的新卡片:', newCard);
+    res.json(newCard);
+  } catch (error) {
+    console.error('创建卡片失败:', error);
+    res.status(500).json({ error: '创建卡片失败' });
+  }
 });
 
 // API: 更新卡片（包括移动分类）
-app.put('/api/cards/:id', (req, res) => {
-  const { id } = req.params;
-  const { title, attributes, categoryId, type, stockCode } = req.body;
-  const cardIndex = cards.findIndex(card => card.id === id);
-  
-  if (cardIndex === -1) {
-    return res.status(404).json({ error: '卡片不存在' });
+app.put('/api/cards/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, attributes, categoryId, type, stockCode } = req.body;
+    
+    const updateData = {};
+    if (title !== undefined) updateData.title = title;
+    if (attributes !== undefined) updateData.attributes = attributes;
+    if (categoryId !== undefined) updateData.categoryId = categoryId;
+    if (type !== undefined) updateData.type = type;
+    if (stockCode !== undefined) updateData.stockCode = stockCode;
+    
+    const updatedCard = await Card.findByIdAndUpdate(
+      id,
+      updateData,
+      { new: true, runValidators: true }
+    );
+    
+    if (!updatedCard) {
+      return res.status(404).json({ error: '卡片不存在' });
+    }
+    
+    res.json(updatedCard);
+  } catch (error) {
+    console.error('更新卡片失败:', error);
+    res.status(500).json({ error: '更新卡片失败' });
   }
-  
-  if (title !== undefined) cards[cardIndex].title = title;
-  if (attributes !== undefined) cards[cardIndex].attributes = attributes;
-  if (categoryId !== undefined) cards[cardIndex].categoryId = categoryId;
-  if (type !== undefined) cards[cardIndex].type = type;
-  if (stockCode !== undefined) cards[cardIndex].stockCode = stockCode;
-  
-  res.json(cards[cardIndex]);
 });
 
 // API: 删除卡片
-app.delete('/api/cards/:id', (req, res) => {
-  const { id } = req.params;
-  cards = cards.filter(card => card.id !== id);
-  res.json({ success: true });
+app.delete('/api/cards/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deletedCard = await Card.findByIdAndDelete(id);
+    
+    if (!deletedCard) {
+      return res.status(404).json({ error: '卡片不存在' });
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('删除卡片失败:', error);
+    res.status(500).json({ error: '删除卡片失败' });
+  }
 });
 
 // 主页路由
