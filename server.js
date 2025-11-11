@@ -164,11 +164,11 @@ app.get('/api/stock/fenshi/:code', async (req, res) => {
   });
   const page = await browser.newPage();
 
-  try {
-    let stockData = null;
-    let responseReceived = false;
+  let stockData = null;
+  let responseReceived = false;
 
-    // 监听网络响应，捕获分时图数据
+  try {
+    // 监听网络响应，捕获分时图数据（必须在 page.goto 之前设置）
     page.on('response', async (response) => {
       const url = response.url();
       if (url.includes('https://push2his.eastmoney.com/api/qt/stock/trends2/get')) {
@@ -191,46 +191,67 @@ app.get('/api/stock/fenshi/:code', async (req, res) => {
     });
 
     // 访问股票分时图页面
+    // 使用 'domcontentloaded' 而不是 'networkidle0'，避免因网络活动导致超时
     const url = `https://quote.eastmoney.com/concept/${code}.html#fullScreenChart`;
     console.log('访问URL:', url);
-    await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+    
+    try {
+      // 使用更宽松的等待策略，避免超时
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded', 
+        timeout: 30000 
+      });
+      console.log('页面加载完成，等待数据响应...');
+    } catch (gotoError) {
+      // 如果 page.goto 超时，记录错误但继续执行等待逻辑
+      console.warn('页面加载超时或出错，但继续等待数据响应:', gotoError.message);
+      // 不直接抛出错误，让后续的等待逻辑继续执行
+    }
 
-    // 等待数据加载，最多等待10秒
+    // 等待数据加载，最多等待10秒（20次 * 500ms）
     let waitCount = 0;
-    while (!responseReceived && waitCount < 20) {
+    const maxWaitCount = 20;
+    console.log('开始等待数据响应...');
+    
+    while (!responseReceived && waitCount < maxWaitCount) {
       await waitForTimeout(500);
       waitCount++;
+      if (waitCount % 4 === 0) {
+        console.log(`等待中... (${waitCount * 500}ms / ${maxWaitCount * 500}ms)`);
+      }
     }
 
-    await browser.close();
-
-    if (stockData && stockData.data) {
-      console.log('成功获取股票数据');
-      return res.json({
-        success: true,
-        data: stockData.data,
-        message: '股票分时图数据获取成功',
-      });
-    } else {
-      console.log('未能获取到股票数据');
-      return res.status(404).json({
-        success: false,
-        data: null,
-        message: '未能获取到股票分时图数据，请检查股票代码是否正确',
-      });
+    if (!responseReceived) {
+      console.log('等待时间太长，未能获取到股票分时图数据');
     }
+
   } catch (error) {
+    // 捕获除 page.goto 超时外的其他错误
     console.error('获取股票分时图数据时出错:', error);
+  } finally {
+    // 确保浏览器总是被关闭
     try {
       await browser.close();
-    } catch (e) {
-      // 忽略关闭错误
+      console.log('浏览器已关闭');
+    } catch (closeError) {
+      console.error('关闭浏览器时出错:', closeError);
     }
-    return res.status(500).json({
+  }
+
+  // 在 finally 之后处理响应，确保浏览器已关闭
+  if (stockData && stockData.data) {
+    console.log('成功获取股票数据');
+    return res.json({
+      success: true,
+      data: stockData.data,
+      message: '股票分时图数据获取成功',
+    });
+  } else {
+    console.log('未能获取到股票数据');
+    return res.status(404).json({
       success: false,
       data: null,
-      message: '获取股票分时图数据时出错',
-      error: error instanceof Error ? error.message : String(error),
+      message: '未能获取到股票分时图数据，请检查股票代码是否正确',
     });
   }
 });

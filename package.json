@@ -5,7 +5,10 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "debug": "node --inspect server.js",
+    "debug:brk": "node --inspect-brk server.js",
+    "debug:nodemon": "nodemon --exec node --inspect server.js"
   },
   "keywords": [
     "thinkspace",
