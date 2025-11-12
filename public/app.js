@@ -175,6 +175,15 @@ createApp({
             stockData: null,
             loadingStockData: false,
             chartType: 'fenshi',
+            // K线数据（日K、周K、月K）
+            dailyKData: null,
+            weekKData: null,
+            monthKData: null,
+            loadingKlineData: false,
+            // K线数据缓存（按股票代码和周期缓存）
+            klineDataCache: {},
+            // ECharts 实例
+            klineChart: null,
             // 编辑相关
             isEditingCard: false,
             editingCard: null
@@ -441,6 +450,14 @@ createApp({
             this.isEditingCard = false;
             this.stockData = null;
             this.chartType = 'fenshi';
+            // 清空K线数据和图表实例
+            this.dailyKData = null;
+            this.weekKData = null;
+            this.monthKData = null;
+            if (this.klineChart) {
+                this.klineChart.dispose();
+                this.klineChart = null;
+            }
             
             // 如果是股票类型，加载股票数据
             if (this.selectedCard.type === 'stock' && this.selectedCard.stockCode) {
@@ -639,6 +656,358 @@ createApp({
             ctx.fillText('日线图功能开发中...', width / 2, height / 2);
         },
 
+        // 切换图表类型
+        async switchChartType(type) {
+            if (this.chartType === type) return;
+            
+            // 如果是K线图，先销毁旧图表
+            if (this.chartType !== 'fenshi' && this.klineChart) {
+                this.klineChart.dispose();
+                this.klineChart = null;
+            }
+            
+            this.chartType = type;
+            
+            // 如果是分时图，直接绘制（数据已存在）
+            if (type === 'fenshi') {
+                this.$nextTick(() => {
+                    this.drawStockChart();
+                });
+                return;
+            }
+            
+            // 如果是K线图，等待DOM更新后再处理
+            await this.$nextTick();
+            
+            // 检查缓存并加载数据
+            const periodMap = {
+                'daily': 'day',
+                'week': 'week',
+                'month': 'month'
+            };
+            const period = periodMap[type];
+            
+            if (!period) return;
+            
+            // 检查缓存
+            const cacheKey = `${this.selectedCard.stockCode}_${period}`;
+            const cachedData = this.klineDataCache[cacheKey];
+            
+            if (cachedData) {
+                console.log('使用缓存的K线数据:', cacheKey);
+                // 根据周期设置对应的数据
+                if (period === 'day') {
+                    this.dailyKData = cachedData;
+                } else if (period === 'week') {
+                    this.weekKData = cachedData;
+                } else if (period === 'month') {
+                    this.monthKData = cachedData;
+                }
+                // 等待DOM更新后再绘制
+                await this.$nextTick();
+                setTimeout(() => {
+                    this.drawKlineChart();
+                }, 150);
+                return;
+            }
+            
+            // 加载数据
+            await this.loadKlineData(period);
+        },
+
+        // 加载K线数据
+        async loadKlineData(period) {
+            if (!this.selectedCard || !this.selectedCard.stockCode) return;
+            
+            this.loadingKlineData = true;
+            
+            try {
+                // 格式化股票代码
+                let formattedCode = this.selectedCard.stockCode.trim();
+                if (/^\d{6}$/.test(formattedCode)) {
+                    if (formattedCode.startsWith('6')) {
+                        formattedCode = 'SH' + formattedCode;
+                    } else if (formattedCode.startsWith('0') || formattedCode.startsWith('3')) {
+                        formattedCode = 'SZ' + formattedCode;
+                    }
+                } else if (formattedCode.startsWith('sh') || formattedCode.startsWith('sz')) {
+                    formattedCode = formattedCode.toUpperCase();
+                }
+                
+                console.log('加载K线数据，代码:', formattedCode, '周期:', period);
+                
+                const response = await fetch(`/api/stock/kline/${encodeURIComponent(formattedCode)}?period=${period}`);
+                const result = await response.json();
+                
+                if (result.success && result.data && result.data.klines) {
+                    // 存储数据
+                    const dataKey = period === 'day' ? 'dailyKData' : 
+                                   period === 'week' ? 'weekKData' : 'monthKData';
+                    this[dataKey] = result.data;
+                    
+                    // 缓存数据
+                    const cacheKey = `${this.selectedCard.stockCode}_${period}`;
+                    this.klineDataCache[cacheKey] = result.data;
+                    
+                    console.log('K线数据加载成功，共', result.data.klines.length, '条');
+                    
+                    // 等待DOM更新后再绘制图表
+                    await this.$nextTick();
+                    setTimeout(() => {
+                        this.drawKlineChart();
+                    }, 150);
+                } else {
+                    console.error('获取K线数据失败:', result.message || '未知错误');
+                    alert('获取K线数据失败: ' + (result.message || '请检查股票代码是否正确'));
+                }
+            } catch (error) {
+                console.error('加载K线数据失败:', error);
+                alert('加载K线数据失败: ' + (error.message || '网络错误'));
+            } finally {
+                this.loadingKlineData = false;
+            }
+        },
+
+        // 使用 ECharts 绘制K线图
+        drawKlineChart() {
+            // 确保DOM元素已渲染，使用重试机制
+            const tryDraw = (retryCount = 0) => {
+                if (!this.$refs.klineChartContainer) {
+                    if (retryCount < 10) {
+                        // 如果DOM还没准备好，等待后重试
+                        setTimeout(() => tryDraw(retryCount + 1), 50);
+                        return;
+                    }
+                    console.error('K线图表容器不存在，重试次数已用完');
+                    return;
+                }
+                
+                // 检查容器是否有尺寸
+                const container = this.$refs.klineChartContainer;
+                if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+                    if (retryCount < 10) {
+                        setTimeout(() => tryDraw(retryCount + 1), 50);
+                        return;
+                    }
+                    console.warn('K线图表容器尺寸为0，但继续尝试绘制');
+                }
+                
+                // 获取当前周期的数据
+                let klineData = null;
+                if (this.chartType === 'daily') {
+                    klineData = this.dailyKData;
+                } else if (this.chartType === 'week') {
+                    klineData = this.weekKData;
+                } else if (this.chartType === 'month') {
+                    klineData = this.monthKData;
+                }
+                
+                if (!klineData || !klineData.klines || klineData.klines.length === 0) {
+                    console.error('K线数据不存在或为空');
+                    return;
+                }
+                
+                this._doDrawKlineChart(klineData);
+            };
+            
+            tryDraw();
+        },
+        
+        // 实际绘制K线图的方法
+        _doDrawKlineChart(klineData) {
+            // 销毁旧图表
+            if (this.klineChart) {
+                this.klineChart.dispose();
+                this.klineChart = null;
+            }
+            
+            // 确保容器存在且有尺寸
+            const container = this.$refs.klineChartContainer;
+            if (!container) {
+                console.error('K线图表容器不存在');
+                return;
+            }
+            
+            // 创建新图表
+            this.klineChart = echarts.init(container);
+            
+            // 确保图表容器有尺寸
+            if (container.offsetWidth === 0 || container.offsetHeight === 0) {
+                console.warn('图表容器尺寸为0，尝试调整');
+                // 如果容器没有尺寸，设置默认尺寸
+                container.style.width = container.parentElement?.clientWidth + 'px' || '800px';
+                container.style.height = '400px';
+            }
+            
+            // 准备数据
+            const dates = klineData.klines.map(item => item.date);
+            const values = klineData.klines.map(item => [
+                item.open,
+                item.close,
+                item.low,
+                item.high
+            ]);
+            const volumes = klineData.klines.map(item => item.volume);
+            
+            // 配置选项
+            const option = {
+                title: {
+                    text: `${klineData.name || klineData.code} - ${this.chartType === 'daily' ? '日K' : this.chartType === 'week' ? '周K' : '月K'}`,
+                    left: 0,
+                    textStyle: {
+                        fontSize: 14
+                    }
+                },
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: {
+                        type: 'cross'
+                    },
+                    formatter: function(params) {
+                        const dataIndex = params[0].dataIndex;
+                        const kline = klineData.klines[dataIndex];
+                        return `
+                            <div style="padding: 5px;">
+                                <div><strong>${kline.date}</strong></div>
+                                <div>开盘: ${kline.open.toFixed(2)}</div>
+                                <div>收盘: ${kline.close.toFixed(2)}</div>
+                                <div>最高: ${kline.high.toFixed(2)}</div>
+                                <div>最低: ${kline.low.toFixed(2)}</div>
+                                <div>成交量: ${(kline.volume / 10000).toFixed(2)}万</div>
+                                <div>涨跌幅: ${kline.zdf > 0 ? '+' : ''}${kline.zdf.toFixed(2)}%</div>
+                            </div>
+                        `;
+                    }
+                },
+                grid: [
+                    {
+                        left: '10%',
+                        right: '8%',
+                        top: '15%',
+                        height: '60%'
+                    },
+                    {
+                        left: '10%',
+                        right: '8%',
+                        top: '80%',
+                        height: '15%'
+                    }
+                ],
+                xAxis: [
+                    {
+                        type: 'category',
+                        data: dates,
+                        scale: true,
+                        boundaryGap: false,
+                        axisLine: { onZero: false },
+                        splitLine: { show: false },
+                        min: 'dataMin',
+                        max: 'dataMax',
+                        axisLabel: {
+                            formatter: function(value) {
+                                return value.substring(5); // 只显示月-日
+                            }
+                        }
+                    },
+                    {
+                        type: 'category',
+                        gridIndex: 1,
+                        data: dates,
+                        scale: true,
+                        boundaryGap: false,
+                        axisLine: { onZero: false },
+                        axisTick: { show: false },
+                        splitLine: { show: false },
+                        min: 'dataMin',
+                        max: 'dataMax',
+                        axisLabel: { show: false }
+                    }
+                ],
+                yAxis: [
+                    {
+                        scale: true,
+                        splitArea: {
+                            show: true
+                        },
+                        position: 'right'
+                    },
+                    {
+                        scale: true,
+                        gridIndex: 1,
+                        splitNumber: 2,
+                        axisLabel: { show: false },
+                        axisLine: { show: false },
+                        axisTick: { show: false },
+                        splitLine: { show: false }
+                    }
+                ],
+                dataZoom: [
+                    {
+                        type: 'inside',
+                        xAxisIndex: [0, 1],
+                        start: 70,
+                        end: 100
+                    },
+                    {
+                        show: true,
+                        xAxisIndex: [0, 1],
+                        type: 'slider',
+                        top: '95%',
+                        start: 70,
+                        end: 100
+                    }
+                ],
+                series: [
+                    {
+                        name: 'K线',
+                        type: 'candlestick',
+                        data: values,
+                        itemStyle: {
+                            color: '#ef5350',      // 上涨颜色（红色）
+                            color0: '#26a69a',    // 下跌颜色（绿色）
+                            borderColor: '#ef5350',
+                            borderColor0: '#26a69a'
+                        }
+                    },
+                    {
+                        name: '成交量',
+                        type: 'bar',
+                        xAxisIndex: 1,
+                        yAxisIndex: 1,
+                        data: volumes.map((vol, index) => {
+                            const kline = klineData.klines[index];
+                            return {
+                                value: vol,
+                                itemStyle: {
+                                    color: kline.close >= kline.open ? '#ef5350' : '#26a69a'
+                                }
+                            };
+                        })
+                    }
+                ]
+            };
+            
+            // 设置配置并渲染
+            this.klineChart.setOption(option);
+            
+            // 确保图表正确渲染
+            this.$nextTick(() => {
+                if (this.klineChart) {
+                    this.klineChart.resize();
+                }
+            });
+            
+            // 响应式调整（避免重复添加监听器）
+            if (!this._klineChartResizeHandler) {
+                this._klineChartResizeHandler = () => {
+                    if (this.klineChart) {
+                        this.klineChart.resize();
+                    }
+                };
+                window.addEventListener('resize', this._klineChartResizeHandler);
+            }
+        },
+
         // 格式化股票价格
         formatStockPrice(trendStr) {
             if (!trendStr) return '--';
@@ -756,10 +1125,26 @@ createApp({
         }
     },
     watch: {
-        chartType() {
+        chartType(newType) {
             this.$nextTick(() => {
-                this.drawStockChart();
+                if (newType === 'fenshi') {
+                    this.drawStockChart();
+                } else {
+                    // K线图在 switchChartType 中处理
+                }
             });
+        }
+    },
+    beforeUnmount() {
+        // 清理 ECharts 实例
+        if (this.klineChart) {
+            this.klineChart.dispose();
+            this.klineChart = null;
+        }
+        // 清理事件监听器
+        if (this._klineChartResizeHandler) {
+            window.removeEventListener('resize', this._klineChartResizeHandler);
+            this._klineChartResizeHandler = null;
         }
     }
 }).mount('#app');

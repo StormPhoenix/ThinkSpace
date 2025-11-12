@@ -220,11 +220,6 @@ app.get('/api/stock/fenshi/:code', async (req, res) => {
         console.log(`等待中... (${waitCount * 500}ms / ${maxWaitCount * 500}ms)`);
       }
     }
-
-    if (!responseReceived) {
-      console.log('等待时间太长，未能获取到股票分时图数据');
-    }
-
   } catch (error) {
     // 捕获除 page.goto 超时外的其他错误
     console.error('获取股票分时图数据时出错:', error);
@@ -252,6 +247,109 @@ app.get('/api/stock/fenshi/:code', async (req, res) => {
       success: false,
       data: null,
       message: '未能获取到股票分时图数据，请检查股票代码是否正确',
+    });
+  }
+});
+
+// 获取股票K线数据（日K、周K、月K）
+app.get('/api/stock/kline/:code', async (req, res) => {
+  let code = decodeURIComponent(req.params.code || 'SH601606');
+  const period = req.query.period || 'day'; // day, week, month
+  
+  // 确保代码格式正确（大写）
+  if (code.startsWith('sh') || code.startsWith('sz')) {
+    code = code.toUpperCase();
+  }
+  
+  // 提取纯数字代码
+  let pureCode = code.replace(/^(SH|SZ)/, '');
+  
+  // 判断市场：6开头是上海(1)，其他是深圳(0)
+  const marketCode = pureCode.startsWith('6') ? 1 : 0;
+  const secid = `${marketCode}.${pureCode}`;
+  
+  // K线类型：101=日K, 102=周K, 103=月K
+  const kltMap = {
+    'day': '101',
+    'week': '102',
+    'month': '103'
+  };
+  const klt = kltMap[period] || '101';
+  
+  console.log('开始获取股票K线数据，代码:', code, '周期:', period);
+  
+  try {
+    // 构建请求URL
+    const url = new URL('https://push2his.eastmoney.com/api/qt/stock/kline/get');
+    url.searchParams.set('secid', secid);
+    url.searchParams.set('fields1', 'f1,f2,f3,f4,f5,f6');
+    url.searchParams.set('fields2', 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61');
+    url.searchParams.set('klt', klt);
+    url.searchParams.set('fqt', '1'); // 前复权
+    url.searchParams.set('end', new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+    url.searchParams.set('lmt', '210');
+    
+    console.log('请求URL:', url.toString());
+    
+    // 发送请求
+    const response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const jsonData = await response.json();
+    
+    if (!jsonData || !jsonData.data || !jsonData.data.klines) {
+      return res.status(404).json({
+        success: false,
+        data: null,
+        message: '未能获取到K线数据',
+      });
+    }
+    
+    // 解析K线数据：每个字符串格式为 "date,open,close,high,low,volume,volume_money,zf,zdf,zde,hsl"
+    const klines = jsonData.data.klines.map(line => {
+      const parts = line.split(',');
+      return {
+        date: parts[0],
+        open: parseFloat(parts[1]) || 0,
+        close: parseFloat(parts[2]) || 0,
+        high: parseFloat(parts[3]) || 0,
+        low: parseFloat(parts[4]) || 0,
+        volume: parseFloat(parts[5]) || 0,
+        volume_money: parseFloat(parts[6]) || 0,
+        zf: parseFloat(parts[7]) || 0,      // 振幅
+        zdf: parseFloat(parts[8]) || 0,     // 涨跌幅
+        zde: parseFloat(parts[9]) || 0,     // 涨跌额
+        hsl: parseFloat(parts[10]) || 0     // 换手率
+      };
+    });
+    
+    console.log(`成功获取K线数据，共 ${klines.length} 条`);
+    
+    return res.json({
+      success: true,
+      data: {
+        code: jsonData.data.code || code,
+        name: jsonData.data.name || '',
+        klines: klines,
+        period: period
+      },
+      message: '股票K线数据获取成功',
+    });
+  } catch (error) {
+    console.error('获取股票K线数据时出错:', error);
+    return res.status(500).json({
+      success: false,
+      data: null,
+      message: '获取股票K线数据时出错',
+      error: error instanceof Error ? error.message : String(error),
     });
   }
 });
